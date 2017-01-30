@@ -182,12 +182,18 @@
  * Intake Air Temp(degree celsius): ID 0x250, data[3] - 40
  */
 
-#include <FlexCAN.h>
+#include "rx8.h"
 
 #define CANbaund	500000
-#define LED		13
 
 FlexCAN CANbus(CANbaund);
+
+/* ----------------------------------------------------------------------------------------------------
+ * Global variables
+ * ---------------------------------------------------------------------------------------------------- */
+struct statuses G_status;
+struct wheel G_wheel;
+struct engine G_eng;
 
 static CAN_message_t msg_tx;
 
@@ -201,7 +207,8 @@ uint8_t ary_ECU[8] = { 0x0F, 0x00, 0xFF, 0xFF, 0x02, 0x2D, 0x06, 0x81 };
 uint8_t ary_TCP[8] = { 0x00, 0x00, 0xCF, 0x87, 0x7F, 0x83, 0x00, 0x00 };
 uint8_t ary_EPS[8] = { 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x32, 0x06, 0x81 };
 uint8_t ary_CY[8] = { 0x89, 0x89, 0x89, 0x19, 0x34, 0x1F, 0xC8, 0xFF };
-uint8_t ary_FL[8] = { 0x0A, 0x95, 0, 0, 0, 0xcc, 0, 0 };
+uint8_t ary_FL[8] = { 0x47, 0x92, 0x91, 0, 0, 0xcc, 0, 0 };
+uint8_t ary_STR[8] = { 0x33, 0x96, 0x99, 0, 0, 0, 0, 0 };
 
 /*
  * value	RPM
@@ -246,15 +253,28 @@ void setup()
 
 	delay(1000);
 
-	Serial.println("Init...");
+	DPL("Init...");
 
-	pinMode(LED, OUTPUT);
+	Wire.begin(I2C_MASTER, 0, I2C_PINS_18_19, I2C_PULLUP_EXT, I2C_RATE_400);
+
+	pinMode(D_P_VR, INPUT);
+	pinMode(D_P_LED, OUTPUT);
+
+	DPL("setup(): init. LCD module...");
+
+	lcd_init();
+	lcd_clear(true);
+
+	noInterrupts();								// disable global interrupts
+
+	attachInterrupt(D_P_VR, ISR_vr_puc, RISING);				// pick-up coil signal
+
+	interrupts();								// enable global interrupts
 
 	CANbus.begin();
-
 	msg_tx.len = 8;
 
-	Serial.println("OK!");
+	DPL("OK!");
 }
 
 /** **************************************************************************************************************
@@ -262,6 +282,8 @@ void setup()
  */
 void loop()
 {
+	G_status.time = millis();						// Current Time
+
 	/*
 	 * ary_count[0] -> 較慢迴圈的計數器
 	 * ary_count[1] -> 預計增加的 trip 數(單位 KM)
@@ -291,8 +313,8 @@ void loop()
 
 				ary_MIL[0] = atoi(ary_str);
 
-				Serial.print("temperture: ");
-				Serial.println(ary_MIL[0]);
+				DP("temperture: ");
+				DPL(ary_MIL[0]);
 			}
 			else if (toupper(ary_str[idx]) == 'I')			// *** Trip distance?
 			{
@@ -304,13 +326,13 @@ void loop()
 
 				ary_count[1] = atoi(ary_str);
 
-				Serial.print("Trip distance: ");
-				Serial.print(ary_count[1]);
+				DP("Trip distance: ");
+				DP(ary_count[1]);
 
-				ary_count[1] = ary_count[1] * 2560 + 1;
+				ary_count[1] = ary_count[1] * 2570;
 
-				Serial.print("KM, count: ");
-				Serial.println(ary_count[1]);
+				DP("KM, count: ");
+				DPL(ary_count[1]);
 			}
 			else if (toupper(ary_str[idx]) == 'N')			// *** Check engine warning?
 			{
@@ -332,8 +354,8 @@ void loop()
 						break;
 				}
 
-				Serial.print("Check engine warning: ");
-				Serial.println(ary_MIL[5], BIN);
+				DP("Check engine warning: ");
+				DPL(ary_MIL[5], BIN);
 			}
 			else if (toupper(ary_str[idx]) == 'O')			// *** Oil Pressure?
 			{
@@ -348,10 +370,10 @@ void loop()
 					ary_MIL[6] |= 0b10000000;
 				}
 
-				Serial.print("Oil Pressure: ");
-				Serial.print(ary_MIL[4], HEX);
-				Serial.print(", ");
-				Serial.println(ary_MIL[6], HEX);
+				DP("Oil Pressure: ");
+				DP(ary_MIL[4], HEX);
+				DP(", ");
+				DPL(ary_MIL[6], HEX);
 			}
 			else if (toupper(ary_str[idx]) == 'R')			// *** Bat charge warning?
 			{
@@ -364,8 +386,8 @@ void loop()
 					ary_MIL[6] |= 0b01000000;
 				}
 
-				Serial.print("Bat charge warning: ");
-				Serial.println(ary_MIL[6], BIN);
+				DP("Bat charge warning: ");
+				DPL(ary_MIL[6], BIN);
 			}
 			else if (toupper(ary_str[idx]) == 'W')			// *** Low water warning?
 			{
@@ -378,15 +400,15 @@ void loop()
 					ary_MIL[6] |= 0b00000010;
 				}
 
-				Serial.print("Low water warning: ");
-				Serial.println(ary_MIL[6], BIN);
+				DP("Low water warning: ");
+				DPL(ary_MIL[6], BIN);
 			}
 			else if (toupper(ary_str[idx]) == 'E')			// *** ETC status?
 			{
 				ary_DSC[6] = ary_str[idx] == 'e' ? 0b00000100 : 0b00001000;
 
-				Serial.print("ETC status: ");
-				Serial.println(ary_DSC[6], BIN);
+				DP("ETC status: ");
+				DPL(ary_DSC[6], BIN);
 			}
 			else if (toupper(ary_str[idx]) == 'B')			// *** Brake warning?
 			{
@@ -399,8 +421,8 @@ void loop()
 					ary_DSC[4] |= 0b01000000;
 				}
 
-				Serial.print("Brake warning: ");
-				Serial.println(ary_DSC[4], BIN);
+				DP("Brake warning: ");
+				DPL(ary_DSC[4], BIN);
 			}
 			else if (toupper(ary_str[idx]) == 'A')			// *** ABS warning?
 			{
@@ -413,8 +435,8 @@ void loop()
 					ary_DSC[4] |= 0b00001000;
 				}
 
-				Serial.print("ABS warning: ");
-				Serial.println(ary_DSC[4], BIN);
+				DP("ABS warning: ");
+				DPL(ary_DSC[4], BIN);
 			}
 			else if (toupper(ary_str[idx]) == 'D')			// *** DSC & TCS warning?
 			{
@@ -429,10 +451,10 @@ void loop()
 					ary_DSC[5] = 0x40;
 				}
 
-				Serial.print("DSC & TCS warning: ");
-				Serial.print(ary_DSC[3], HEX);
-				Serial.print(", ");
-				Serial.println(ary_DSC[5], HEX);
+				DP("DSC & TCS warning: ");
+				DP(ary_DSC[3], HEX);
+				DP(", ");
+				DPL(ary_DSC[5], HEX);
 			}
 			else if (toupper(ary_str[idx]) == 'P')			// *** RPM?
 			{
@@ -445,8 +467,8 @@ void loop()
 				ary_count[2] = atoi(ary_str);
 				ary_count[6] = 300;
 
-				Serial.print("Target RPM: ");
-				Serial.println(ary_count[2]);
+				DP("Target RPM: ");
+				DPL(ary_count[2]);
 			}
 			else if (toupper(ary_str[idx]) == 'S')			// *** Speed?
 			{
@@ -459,10 +481,26 @@ void loop()
 				ary_count[4] = atoi(ary_str);
 				ary_count[6] = 80;
 
-				Serial.print("Target Speed: ");
-				Serial.println(ary_count[4]);
+				DP("Target Speed: ");
+				DPL(ary_count[4]);
 			}
 		}
+
+//		msg_tx.id = 0x300;
+//		memcpy(msg_tx.buf, &ary_STR, 8);
+//		CANbus.write(msg_tx);
+//
+//		if (ary_STR[0] == 0x33)
+//		{
+//			ary_STR[0] = 0;
+//			ary_STR[1] = 0;
+//			ary_STR[2] = 0xff;
+//			ary_STR[3] = 0xff;
+//			ary_STR[4] = 0x27;
+//			ary_STR[5] = 0x10;
+//			ary_STR[6] = 0xc0;
+//			ary_STR[7] = 0x01;
+//		}
 
 		msg_tx.id = 0x200;
 		memcpy(msg_tx.buf, &ary_EPS, 8);
@@ -500,47 +538,74 @@ void loop()
 		memcpy(msg_tx.buf, &ary_FL, 8);
 		CANbus.write(msg_tx);
 
-		if ((ary_count[1] =  ary_count[1] - 1) > 0)			// *** 有設定預計增加的 trip 數(單位 KM)?
+		if (ary_count[1] > 0)						// *** 有設定預計增加的 trip 數(單位 KM)?
 		{
 			/*
 			 * 根據實驗:
+			 * -每送出 257 次 1 即增加 100M 的距離
 			 * -每送出 43 次 10 即增加 100M 的距離
 			 * -每送出 22 次 20 即增加 100M 的距離
 			 * ->每單位 0.23M
 			 *
-			 * 似乎 ary_MIL[1] overflow 的時候就算 100M, 並非 1 單位是 0.23M 的樣子...
-			 * 依照這個方式計算, 每單位應為 0.390625M
+			 * 似乎 ary_MIL[1] 並非 1 單位是 0.23M 的樣子...
+			 * 依照每送出 257 次 1 即增加 100M 的距離這個方式計算, 每單位應為 0.389105058M
 			 */
 			ary_MIL[1] = ary_MIL[1] + 1;
 
-			Serial.print("Trip distance count1: ");
-			Serial.print(ary_count[1]);
-			Serial.print(", count2: ");
-			Serial.println(ary_MIL[1]);
+			DP("Trip distance count1: ");
+			DP(ary_count[1]);
+			DP(", count2: ");
+			DPL(ary_MIL[1]);
+
+			ary_count[1] =  ary_count[1] - 1;
 		}
 
-		digitalWrite(LED, !digitalRead(LED));
+		digitalWrite(D_P_LED, !digitalRead(D_P_LED));
 	}
 
-	if ((ary_count[0] = ary_count[0] + 1) > 10)
+	if ((ary_count[0] = ary_count[0] + 1) > 30)
 	{
 		ary_count[0] = 0;		
 	}
 
-	if (ary_count[2] > 0)							// *** 指定 RPM?
+	if (ary_count[2] > 0							// *** 指定 RPM?
+		|| (G_eng.rpm_alive && G_eng.sync_whl))
 	{
-		uint16_t rpm = map_rpm(ary_count[3]);
-
-		ary_RPM[0] = (rpm * 4) / 256;
-		ary_RPM[1] = (rpm * 4) % 256;
-
-		ary_count[3] = ary_count[3] + 20;
-
-		if (ary_count[3] > ary_count[2])				// *** 已經超過指定轉速值?
+		if (G_eng.rpm_alive)
 		{
-			ary_count[2] = 0;
-			ary_count[3] = 1;
+			uint32_t tmp_wheel_ts0 = G_wheel.ts_to0;
+			uint32_t tmp_wheel_ts1 = G_wheel.ts_to1;
+
+			G_rpm_raw = 60000000 / (tmp_wheel_ts0 - tmp_wheel_ts1);
+
+			if (G_rpm_raw > 10000)					// 測到的轉速 > 10,000 RPM?
+			{
+				G_rpm_raw = 10000;
+			}
+
+			G_rpm = map_rpm(G_rpm_raw);				// 計算/對應目前的引擎轉速
+
+			if (ary_count[0] % 6 == 0)
+			{
+				lcd_strxy(dtostrf(G_rpm_raw, 6, 0, G_ary_buf), 0, 0);
+				lcd_strxy(dtostrf(G_rpm, 6, 0, G_ary_buf), 0, 1);
+			}
 		}
+		else
+		{
+			G_rpm = map_rpm(ary_count[3]);
+
+			ary_count[3] = ary_count[3] + 20;
+
+			if (ary_count[3] > ary_count[2])			// *** 已經超過指定轉速值?
+			{
+				ary_count[2] = 0;
+				ary_count[3] = 1;
+			}
+		}
+
+		ary_RPM[0] = (G_rpm * 4) / 256;
+		ary_RPM[1] = (G_rpm * 4) % 256;
 	}
 	else if (ary_count[3] == 1 && ary_count[6] > 0)
 	{
@@ -590,10 +655,10 @@ void loop()
 	CANbus.write(msg_tx);
 
 #ifdef DEBUG
-	if (CANbus.read(msg_rx))
-	{
-		hexDump(sizeof(msg_rx), (uint8_t *)&msg_rx);
-	}
+//	if (CANbus.read(msg_rx))
+//	{
+//		hexDump(sizeof(msg_rx), (uint8_t *)&msg_rx);
+//	}
 #endif
 
 	delay(10);
@@ -619,6 +684,64 @@ uint16_t map_rpm(uint16_t rpm)
 	}
 	
 	return 0;
+}
+
+/** **************************************************************************************************************
+ * 計算 crankshaft angle & RPM
+ */
+void ISR_vr_puc(void)
+{
+	G_wheel.ts0 = micros();
+
+	if (G_wheel.ts1 == 0)							// *** 第 1 次偵測到訊號?
+	{
+		G_wheel.ts1 = G_wheel.ts0;
+
+		return;
+	}
+
+	G_wheel.gap = G_wheel.ts0 - G_wheel.ts1;
+
+	if (G_wheel.gap < G_wheel.filter)					// *** 異常的訊號?
+	{
+		DP("ISR_vr_puc(): abnormal signal! ");
+		DP(G_wheel.gap);
+		DP(" < ");
+		DPL(G_wheel.filter);
+
+		return;
+	}
+
+	uint8_t tmp_idx = G_wheel.history_idx ? G_wheel.history_idx - 1 : 0;
+
+	/*
+	 * ZZR/ZRX 系列的 trigger wheel 與 missing tooth 不同
+	 */
+	if (G_wheel.gap * 2 < G_wheel.history[tmp_idx])				// *** 即使目前的間隔時間 *2 還是小於最後一次的間隔時間?
+	{
+		if (!G_eng.sync_whl && G_wheel.ts_to0 > 0)			// *** 尚未設立 wheel 同步旗標?
+		{
+			G_eng.sync_whl = true;
+		}
+
+		if (G_eng.sync_cyl)
+		{
+			G_wheel.angle_ex = G_wheel.angle_ex ? 0 : 36000;	// 因為 Teensy 3.1 沒有 FPU 的關係, 所以採用這種方式保留小數 2 位
+		}
+
+		G_wheel.count = 0;
+		G_wheel.ts_to1 = G_wheel.ts_to0;				// 保留 tooth#1 出現的時間 - 計算 RPM 用
+		G_wheel.ts_to0 = G_wheel.ts0;
+		G_eng.rpm_alive = G_status.time;
+	}
+	else
+	{
+		G_wheel.count++;
+	}
+
+	G_wheel.ts1 = G_wheel.ts0;
+	G_wheel.history[G_wheel.history_idx] = G_wheel.gap;			// 如果 G_wheel.history_idx 溢位就會回到 0 了 XD
+	G_wheel.history_idx += 1;
 }
 
 #ifdef DEBUG
